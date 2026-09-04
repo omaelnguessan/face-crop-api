@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -15,7 +16,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    allowed_hosts: tuple[str, ...] = ("openinary.icoop.live",)
+    # `NoDecode` : sans lui, pydantic-settings tente un `json.loads` sur la
+    # variable d'environnement avant d'appeler `_split_hosts`, et une valeur
+    # comme `ALLOWED_HOSTS=a.com,b.com` fait échouer le démarrage.
+    allowed_hosts: Annotated[tuple[str, ...], NoDecode] = ("openinary.icoop.live",)
     max_dimension: int = 2000
     min_dimension: int = 16
     max_bytes: int = 12 * 1024 * 1024

@@ -4,8 +4,9 @@ services:
     image: face-crop-api:latest
     ports:
       - "8000:8000"
-    volumes:
-      - ./models:/app/models
+    # Pas de montage sur /app/models : le modèle (230 Ko) est embarqué dans
+    # l'image au build. Un volume hôte masquerait le dossier et ferait démarrer
+    # le service en mode dégradé (503 sur toutes les routes).
     environment:
       ALLOWED_HOSTS: openinary.icoop.live
       MAX_DIMENSION: "2000"
@@ -13,12 +14,22 @@ services:
       SCORE_THRESHOLD: "0.75"
       NMS_THRESHOLD: "0.3"
       DEFAULT_ZOOM: "2.6"
-      WORKERS: "4"
+      WORKERS: "2"
       CACHE_TTL: "604800"
       OMP_NUM_THREADS: "2"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      # Vérifie `model_loaded`, pas seulement le code HTTP : sans modèle le
+      # service répond 200 sur /healthz tout en renvoyant 503 partout ailleurs.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import json, sys, urllib.request
+          d = json.load(urllib.request.urlopen("http://localhost:8000/healthz"))
+          sys.exit(0 if d.get("model_loaded") else 1)
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s

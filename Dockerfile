@@ -1,8 +1,8 @@
 FROM python:3.12-slim
 
-# OpenCV a besoin de ces libs système même en build headless.
+# `opencv-python-headless` ne lie pas libGL ; seule libglib2.0-0 est requise.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 curl ca-certificates \
+ && apt-get install -y --no-install-recommends libglib2.0-0 curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 # Sans cette limite, OpenCV lance un thread par cœur et les workers Uvicorn
