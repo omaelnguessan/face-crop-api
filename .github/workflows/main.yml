@@ -21,4 +21,5 @@ jobs:
           script: |
             cd /root/containers/face-crop-api
             git pull
+            docker compose down
             docker compose up -d --build
