@@ -3,7 +3,7 @@ services:
     build: .
     image: face-crop-api:latest
     ports:
-      - "{PUBLIC_PORT}:8000"
+      - "${PUBLIC_PORT}:8000"
     # Pas de montage sur /app/models : le modèle (230 Ko) est embarqué dans
     # l'image au build. Un volume hôte masquerait le dossier et ferait démarrer
     # le service en mode dégradé (503 sur toutes les routes).
