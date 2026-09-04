@@ -20,4 +20,5 @@ jobs:
           password: "${{ secrets.ICOOP_UBUNTU_PASSWORD }}"
           script: |
             cd /root/containers/face-crop-api
+            git pull
             docker compose up -d --build
