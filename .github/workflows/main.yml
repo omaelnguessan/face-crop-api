@@ -1,0 +1,22 @@
+name: Sync-pipeline
+on:
+  push:
+    branches:
+      - main 
+
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+      - name: build & deploy docker
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: "payohada.cloud"
+          username: root
+          password: "${{ secrets.ICOOP_UBUNTU_PASSWORD }}"
+          script: |
+            cd /root/containers/face-crop-api
+            docker compose down
+            docker compose up -d --build
