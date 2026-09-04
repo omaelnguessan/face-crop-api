@@ -1,4 +1,6 @@
 name: Sync-pipeline
+
+
 on:
   push:
     branches:
@@ -13,10 +15,9 @@ jobs:
       - name: build & deploy docker
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: "payohada.cloud"
+          host: "icoop.live"
           username: root
           password: "${{ secrets.ICOOP_UBUNTU_PASSWORD }}"
           script: |
             cd /root/containers/face-crop-api
-            docker compose down
             docker compose up -d --build
