@@ -115,6 +115,63 @@ curl -s http://localhost:8000/healthz
 
 ---
 
+## Presets
+
+Un preset fixe `w`, `h` et `zoom` en un seul paramètre, pour ne pas avoir à retenir des
+valeurs de cadrage.
+
+| Preset | `w`x`h` | `zoom` | Usage |
+|---|---|---|---|
+| `id` | `413x531` | `1.9` | Photo d'identité 35x45 mm à 300 dpi |
+
+### `preset=id` — format photo d'identité
+
+`413x531` correspond à 35x45 mm à 300 dpi, le format ICAO 9303 / ANTS (ratio 0.778). Le
+`zoom` de 1.9 place la tête (crâne→menton) à environ **76 %** de la hauteur du cadre, dans
+la fourchette 70–80 % exigée par la norme — là où le `zoom` par défaut de 2.6 ne donne que
+~56 %, trop large.
+
+```bash
+curl -s "http://localhost:8000/v1/face/coords?url=<URL>&preset=id" | jq
+```
+
+```json
+{
+  "source": { "width": 2000, "height": 2500 },
+  "faces": 1,
+  "crop": { "x": 725, "y": 597, "w": 886, "h": 1139 },
+  "transformation": "c_crop,x_725,y_597,w_886,h_1139",
+  "url": "https://openinary.icoop.live/.../c_crop,x_725,y_597,w_886,h_1139/c_fill,w_413,h_531/...",
+  "preset": "id",
+  "warnings": []
+}
+```
+
+### Warnings de conformité
+
+Sur `/v1/face/coords` avec `preset=id` uniquement, la réponse porte un tableau `warnings`.
+Il est vide quand tous les contrôles passent.
+
+| Warning | Déclencheur |
+|---|---|
+| `aucun visage détecté` | Repli sur un crop centré : le résultat n'est pas conforme |
+| `N visages détectés` | Une photo d'identité ne doit contenir qu'un sujet |
+| `confiance de détection faible` | Score YuNet du sujet < 0.90 |
+| `résolution source insuffisante` | Le crop est plus petit que 413x531 et serait agrandi |
+| `cadre tronqué par les bords` | L'image est trop courte pour le cadrage visé ; le % de tête réel est indiqué |
+
+**Ces contrôles sont indicatifs, pas une validation officielle.** Ils ne portent que sur ce
+qui est mesurable depuis la détection : nombre de visages, confiance, résolution, cadrage.
+La norme exige aussi un fond uni clair, une expression neutre bouche fermée, un regard vers
+l'objectif et une tête droite — rien de tout cela n'est vérifié ici, `YuNet` ne renvoyant
+qu'une boîte englobante et un score.
+
+Le facteur tête/boîte de `1.45` utilisé pour dériver le `zoom` de 1.9 (`app/presets.py`) est
+une approximation : `YuNet` cadre approximativement des sourcils au menton, pas le crâne. Sur
+un corpus de photos représentatif, il vaut la peine de le recalibrer.
+
+---
+
 ## Paramètres
 
 | Paramètre | Défaut | Routes | Description |
@@ -124,14 +181,18 @@ curl -s http://localhost:8000/healthz
 | `h` | `400` | toutes | Hauteur cible (16–2000) |
 | `zoom` | `2.6` | toutes | Hauteur du crop en multiples de la hauteur du visage (2.6 ≈ portrait serré, 4+ ≈ buste) |
 | `all_faces` | `false` | toutes | Englober tous les visages détectés plutôt que le plus grand |
+| `preset` | — | toutes | Jeu de valeurs pour `w`/`h`/`zoom` (voir [Presets](#presets)) |
 | `quality` | `82` | `/render` | Qualité JPEG (1–100) |
+
+Un paramètre passé explicitement l'emporte toujours sur la valeur du preset :
+`?preset=id&w=350&h=450` garde le `zoom` du preset mais impose ses propres dimensions.
 
 ### Codes de réponse
 
 | Code | Cause |
 |---|---|
 | `403` | Schéma ≠ `https`, ou hôte hors liste blanche |
-| `400` | `w`/`h` hors bornes, ou `zoom` hors bornes |
+| `400` | `w`/`h` hors bornes, `zoom` hors bornes, ou `preset` inconnu |
 | `422` | Source non téléchargeable, trop volumineuse, non décodable, ou URL sans segment `upload` |
 | `503` | Modèle ONNX absent (lance `scripts/download_model.sh`) |
 
