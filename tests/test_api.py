@@ -33,7 +33,7 @@ class FakeService:
             raise self.fail
         return self.detection
 
-    async def render(self, url, w, h, zoom, all_faces, quality) -> bytes:
+    async def render(self, url, w, h, quality, planner) -> bytes:
         if self.fail:
             raise self.fail
         return self.payload

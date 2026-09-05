@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from .config import Settings, get_settings
-from .crop import Crop, plan
+from .crop import Crop, HeadMetrics, measure, plan, plan_by_head
 from .presets import PRESETS, id_warnings, resolve as resolve_preset
 from .service import FaceService, SourceError
 
@@ -89,6 +89,43 @@ def guard(
     )
 
 
+def frame(detection, params: Params) -> tuple[Crop, HeadMetrics | None]:
+    """Calcule le crop, en préférant la géométrie mesurée quand elle est possible.
+
+    Un preset porteur de `head_ratio` (aujourd'hui `id`) cadre sur la tête mesurée
+    dès que le détecteur a fourni des points de repère ; sinon on retombe sur le
+    cadrage par `zoom`, qui reste le comportement historique.
+    """
+    preset = PRESETS.get(params.preset or "")
+    metrics: HeadMetrics | None = None
+
+    if detection.faces and preset is not None and preset.head_ratio is not None:
+        subject = max(detection.faces, key=lambda f: f.area)
+        metrics = measure(subject)
+        if metrics is not None and not params.all_faces:
+            crop = plan_by_head(
+                detection.width,
+                detection.height,
+                metrics,
+                params.w,
+                params.h,
+                head_ratio=preset.head_ratio,
+                eye_line=preset.eye_line or 0.5,
+            )
+            return crop, metrics
+
+    crop = plan(
+        detection.width,
+        detection.height,
+        detection.faces,
+        params.w,
+        params.h,
+        zoom=params.zoom,
+        all_faces=params.all_faces,
+    )
+    return crop, metrics
+
+
 def build_openinary_url(source_url: str, crop: Crop, w: int, h: int) -> str:
     """Insère `c_crop,…/c_fill,w_,h_` juste après le segment `upload` de l'URL."""
     parsed = urlparse(source_url)
@@ -108,6 +145,12 @@ def build_openinary_url(source_url: str, crop: Crop, w: int, h: int) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    if not settings.allowed_hosts:
+        # Cas typique : `ALLOWED_HOSTS: ${ALLOWED_HOSTS}` dans le compose sans
+        # `.env` en face. La liste blanche vide rejette *toutes* les URL en 403.
+        logger.warning(
+            "ALLOWED_HOSTS est vide : toutes les URL source seront rejetées en 403."
+        )
     service: FaceService | None = None
     try:
         service = FaceService(settings)
@@ -158,15 +201,7 @@ async def coords(
     service: FaceService = Depends(get_service),
 ) -> dict[str, object]:
     detection = await service.detect(params.url)
-    rect = plan(
-        detection.width,
-        detection.height,
-        detection.faces,
-        params.w,
-        params.h,
-        zoom=params.zoom,
-        all_faces=params.all_faces,
-    )
+    rect, metrics = frame(detection, params)
     payload: dict[str, object] = {
         "source": {"width": detection.width, "height": detection.height},
         "faces": len(detection.faces),
@@ -177,8 +212,16 @@ async def coords(
     if params.preset == "id":
         payload["preset"] = "id"
         payload["warnings"] = id_warnings(
-            detection.faces, rect, params.w, params.h, params.zoom
+            detection.faces, rect, params.w, params.h, params.zoom, metrics
         )
+        if metrics is not None:
+            payload["measured"] = {
+                "head_ratio": round(metrics.head_height / rect.h, 3),
+                "eye_line": round(
+                    (rect.y + rect.h - metrics.eye_y) / rect.h, 3
+                ),
+                "roll_degrees": round(metrics.roll_degrees, 1),
+            }
     return payload
 
 
@@ -188,15 +231,7 @@ async def redirect(
     service: FaceService = Depends(get_service),
 ) -> RedirectResponse:
     detection = await service.detect(params.url)
-    rect = plan(
-        detection.width,
-        detection.height,
-        detection.faces,
-        params.w,
-        params.h,
-        zoom=params.zoom,
-        all_faces=params.all_faces,
-    )
+    rect, _ = frame(detection, params)
     target = build_openinary_url(params.url, rect, params.w, params.h)
     return RedirectResponse(
         url=target,
@@ -212,7 +247,7 @@ async def render(
     service: FaceService = Depends(get_service),
 ) -> Response:
     payload = await service.render(
-        params.url, params.w, params.h, params.zoom, params.all_faces, quality
+        params.url, params.w, params.h, quality, lambda d: frame(d, params)[0]
     )
     return Response(
         content=payload,

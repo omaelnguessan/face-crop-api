@@ -1,11 +1,57 @@
 from __future__ import annotations
 
+import math
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+
+Point = tuple[float, float]
+
+
+@dataclass(frozen=True, slots=True)
+class Landmarks:
+    """Les 5 points de repère renvoyés par YuNet, dans le repère de l'image source.
+
+    « Droite » et « gauche » sont du point de vue du sujet : l'œil droit apparaît
+    donc à gauche dans l'image.
+    """
+
+    right_eye: Point
+    left_eye: Point
+    nose: Point
+    mouth_right: Point
+    mouth_left: Point
+
+    @property
+    def eye_center(self) -> Point:
+        return (
+            (self.right_eye[0] + self.left_eye[0]) / 2.0,
+            (self.right_eye[1] + self.left_eye[1]) / 2.0,
+        )
+
+    @property
+    def mouth_center(self) -> Point:
+        return (
+            (self.mouth_right[0] + self.mouth_left[0]) / 2.0,
+            (self.mouth_right[1] + self.mouth_left[1]) / 2.0,
+        )
+
+    @property
+    def eye_mouth_distance(self) -> float:
+        """Distance yeux→bouche : échelle du visage stable, contrairement à `h`."""
+        (ex, ey), (mx, my) = self.eye_center, self.mouth_center
+        return math.hypot(mx - ex, my - ey)
+
+    @property
+    def roll_degrees(self) -> float:
+        """Inclinaison de la ligne des yeux, en degrés. 0 = tête droite."""
+        dx = self.left_eye[0] - self.right_eye[0]
+        dy = self.left_eye[1] - self.right_eye[1]
+        return math.degrees(math.atan2(dy, dx))
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +63,7 @@ class FaceBox:
     w: int
     h: int
     score: float
+    landmarks: Landmarks | None = None
 
     @property
     def area(self) -> int:
@@ -110,12 +157,24 @@ class YuNetDetector:
         for row in raw:
             x, y, w, h = (float(v) * inv for v in row[:4])
             score = float(row[-1])
+            # Colonnes 4..13 : 5 points de repère en (x, y), à remettre à l'échelle
+            # comme la boîte. Non clampés : un point hors cadre reste informatif.
+            pts = [(float(row[4 + 2 * i]) * inv, float(row[5 + 2 * i]) * inv) for i in range(5)]
+            landmarks = Landmarks(
+                right_eye=pts[0],
+                left_eye=pts[1],
+                nose=pts[2],
+                mouth_right=pts[3],
+                mouth_left=pts[4],
+            )
             # Clamp dans les bornes de l'image source.
             x0 = max(0, min(src_w - 1, int(round(x))))
             y0 = max(0, min(src_h - 1, int(round(y))))
             w0 = max(1, min(src_w - x0, int(round(w))))
             h0 = max(1, min(src_h - y0, int(round(h))))
-            faces.append(FaceBox(x=x0, y=y0, w=w0, h=h0, score=score))
+            faces.append(
+                FaceBox(x=x0, y=y0, w=w0, h=h0, score=score, landmarks=landmarks)
+            )
 
         faces.sort(key=lambda f: f.area, reverse=True)
         return faces

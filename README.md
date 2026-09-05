@@ -126,10 +126,26 @@ valeurs de cadrage.
 
 ### `preset=id` — format photo d'identité
 
-`413x531` correspond à 35x45 mm à 300 dpi, le format ICAO 9303 / ANTS (ratio 0.778). Le
-`zoom` de 1.9 place la tête (crâne→menton) à environ **76 %** de la hauteur du cadre, dans
-la fourchette 70–80 % exigée par la norme — là où le `zoom` par défaut de 2.6 ne donne que
-~56 %, trop large.
+`413x531` correspond à 35x45 mm à 300 dpi, le format ICAO 9303 / ANTS (ratio 0.778).
+
+Le cadrage est **mesuré, pas estimé** : YuNet renvoie 5 points de repère (yeux, nez, coins
+de la bouche) dont `crop.measure()` déduit la ligne des yeux, le crâne, le menton et
+l'inclinaison. `plan_by_head()` place ensuite la tête à **76 %** de la hauteur du cadre et
+la ligne des yeux à **57,5 %** depuis le bas — les milieux des fourchettes ICAO (70–80 % et
+50–65 %).
+
+L'écart avec un cadrage déduit de la boîte englobante est net. Sur une même photo :
+
+| Méthode | Tête | Ligne des yeux |
+|---|---|---|
+| `zoom=1.9` sur la boîte YuNet | 61,5 % ❌ | 45,5 % ❌ |
+| `plan_by_head` sur les repères | 76,3 % ✅ | 57,7 % ✅ |
+
+La hauteur de la boîte YuNet varie trop avec la pose et l'éclairage pour servir d'échelle.
+La distance yeux→bouche, elle, est stable.
+
+> Sans points de repère (visage trop petit, détecteur en repli), le preset retombe
+> automatiquement sur le cadrage par `zoom=1.9`.
 
 ```bash
 curl -s "http://localhost:8000/v1/face/coords?url=<URL>&preset=id" | jq
@@ -158,7 +174,18 @@ Il est vide quand tous les contrôles passent.
 | `N visages détectés` | Une photo d'identité ne doit contenir qu'un sujet |
 | `confiance de détection faible` | Score YuNet du sujet < 0.90 |
 | `résolution source insuffisante` | Le crop est plus petit que 413x531 et serait agrandi |
-| `cadre tronqué par les bords` | L'image est trop courte pour le cadrage visé ; le % de tête réel est indiqué |
+| `tête à X% du cadre, hors norme` | Hors 70–80 % : l'image est trop courte pour le cadrage visé |
+| `ligne des yeux à X% du bas` | Hors 50–65 % |
+| `tête inclinée de X°` | Roulis > 5°, mesuré sur la ligne des yeux |
+
+Les trois derniers exigent les points de repère ; sans eux, un unique warning générique
+signale un cadre tronqué.
+
+Quand la tête a pu être mesurée, la réponse porte aussi un bloc `measured` :
+
+```json
+"measured": { "head_ratio": 0.763, "eye_line": 0.577, "roll_degrees": 6.7 }
+```
 
 **Ces contrôles sont indicatifs, pas une validation officielle.** Ils ne portent que sur ce
 qui est mesurable depuis la détection : nombre de visages, confiance, résolution, cadrage.
@@ -166,9 +193,11 @@ La norme exige aussi un fond uni clair, une expression neutre bouche fermée, un
 l'objectif et une tête droite — rien de tout cela n'est vérifié ici, `YuNet` ne renvoyant
 qu'une boîte englobante et un score.
 
-Le facteur tête/boîte de `1.45` utilisé pour dériver le `zoom` de 1.9 (`app/presets.py`) est
-une approximation : `YuNet` cadre approximativement des sourcils au menton, pas le crâne. Sur
-un corpus de photos représentatif, il vaut la peine de le recalibrer.
+Les constantes anthropométriques de `crop.py` (`CROWN_ABOVE_EYES = 1.70`,
+`CHIN_BELOW_EYES = 1.60`, exprimées en distances yeux→bouche) restent des moyennes : les
+yeux tombent à peu près au milieu vertical de la tête, mais la morphologie varie. Ce qui est
+réellement mesuré, c'est la ligne des yeux et l'inclinaison ; le crâne et le menton sont
+extrapolés. Sur un corpus représentatif, ces deux facteurs valent d'être recalibrés.
 
 ---
 
@@ -361,8 +390,11 @@ et regarde les `crop.jpg` produits.
 app/
 ├── config.py     Settings pydantic-settings, surchargeables par env
 ├── detector.py   YuNetDetector — une instance par thread (FaceDetectorYN n'est pas thread-safe),
-│                 réduction à 1024 px max puis remise à l'échelle des coordonnées
-├── crop.py       plan() — géométrie pure, testable sans dépendance
+│                 réduction à 1024 px max puis remise à l'échelle ; expose la boîte,
+│                 les 5 points de repère et le score
+├── crop.py       plan() par zoom, plan_by_head() par géométrie mesurée, measure()
+│                 depuis les points de repère — pur, testable sans dépendance
+├── presets.py    presets de cadrage (`id`) et contrôles indicatifs de conformité
 ├── cache.py      TTLCache dict + Lock, 200 000 entrées, 7 jours ; coordonnées seulement
 ├── service.py    fetch streaming plafonné, décodage/détection dans un ThreadPoolExecutor
 └── main.py       routes FastAPI, guard anti-SSRF, lifespan

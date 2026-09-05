@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Callable
 
 import cv2
 import httpx
@@ -10,7 +11,7 @@ import numpy as np
 
 from .cache import TTLCache
 from .config import Settings
-from .crop import Crop, plan
+from .crop import Crop
 from .detector import FaceBox, YuNetDetector
 
 
@@ -120,24 +121,19 @@ class FaceService:
         url: str,
         target_w: int,
         target_h: int,
-        zoom: float,
-        all_faces: bool,
         quality: int,
+        planner: Callable[[Detection], Crop],
     ) -> bytes:
-        """Retourne les octets JPEG de l'image recadrée puis redimensionnée."""
+        """Retourne les octets JPEG de l'image recadrée puis redimensionnée.
+
+        Le cadrage est délégué à `planner` pour que `/render` produise exactement
+        le même rectangle que `/coords` et `/redirect`, presets compris.
+        """
         payload = await self._fetch(url)
         image, detection = await self._run(self._decode_and_detect, payload)
         self._cache.set(url, detection)
 
-        crop = plan(
-            detection.width,
-            detection.height,
-            detection.faces,
-            target_w,
-            target_h,
-            zoom=zoom,
-            all_faces=all_faces,
-        )
+        crop = planner(detection)
         return await self._run(
             self._encode, image, crop, target_w, target_h, quality
         )
